@@ -1,0 +1,7 @@
+-- Fix legacy orders table columns so Day-13 checkout can persist orders cleanly
+ALTER TABLE orders MODIFY COLUMN customer_name VARCHAR(150) NULL DEFAULT NULL;
+ALTER TABLE orders MODIFY COLUMN address TEXT NULL DEFAULT NULL;
+ALTER TABLE orders MODIFY COLUMN phone VARCHAR(20) NOT NULL;
+ALTER TABLE orders MODIFY COLUMN city VARCHAR(100) NOT NULL;
+ALTER TABLE orders MODIFY COLUMN state VARCHAR(100) NOT NULL;
+

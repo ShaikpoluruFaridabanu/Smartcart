@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, session, flash, jsonify, url_for, make_response
 from flask_mail import Mail, Message
-import mysql.connector
+# Database uses sqlite3 via db.py
 import bcrypt
 import random
 import config
@@ -28,16 +28,25 @@ mail = Mail(app)
 
 
 # ---------------- DB CONNECTION FUNCTION --------------
-def get_db_connection():
-    return mysql.connector.connect(
-        host=config.DB_HOST,
-        user=config.DB_USER,
-        password=config.DB_PASSWORD,
-        database=config.DB_NAME
-    )
+from db import get_db_connection, init_db
+
+# Initialize SQLite database schema
+init_db()
 ADMIN_UPLOAD_FOLDER = 'static/uploads/admin_profiles'
 app.config['ADMIN_UPLOAD_FOLDER'] = ADMIN_UPLOAD_FOLDER
 
+USER_UPLOAD_FOLDER = 'static/uploads/user_profiles'
+app.config['USER_UPLOAD_FOLDER'] = USER_UPLOAD_FOLDER
+
+
+
+# ---------------------------------------------------------
+# HOME ROUTE (ROOT)
+# ---------------------------------------------------------
+@app.route('/')
+def home():
+    """Default landing route redirects to shopping dashboard."""
+    return redirect(url_for('user_dashboard'))
 
 
 # ---------------------------------------------------------
@@ -398,6 +407,10 @@ def add_item():
     flash("Product added successfully!", "success")
     return redirect('/admin/add-item')
 @app.route('/admin/item-list')
+@app.route('/admin-itemlist')
+@app.route('/admin-item-list')
+@app.route('/admin/items')
+@app.route('/item-list')
 def item_list():
 
     if 'admin_id' not in session:
@@ -593,7 +606,6 @@ def update_item(item_id):
 
 @app.route('/admin/profile', methods=['GET'])
 def admin_profile():
-
     if 'admin_id' not in session:
         flash("Please login!", "danger")
         return redirect('/admin-login')
@@ -608,79 +620,118 @@ def admin_profile():
 
     cursor.close()
     conn.close()
+
+    if not admin:
+        flash("Admin account not found!", "danger")
+        return redirect('/admin-login')
 
     return render_template("admin/admin_profile.html", admin=admin)
 
-# =================================================================
-# ROUTE 2: UPDATE ADMIN PROFILE (NAME, EMAIL, PASSWORD, IMAGE)
-# =================================================================
-@app.route('/admin/profile', methods=['POST'])
-def admin_profile_update():
 
+# =================================================================
+# ROUTE 2: EDIT / UPDATE ADMIN PROFILE (NAME, EMAIL, PASSWORD, IMAGE)
+# =================================================================
+@app.route('/admin-edit-profile', methods=['GET', 'POST'])
+@app.route('/admin/profile', methods=['POST'])
+@app.route('/admin/edit-profile', methods=['GET', 'POST'])
+def admin_edit_profile():
     if 'admin_id' not in session:
         flash("Please login!", "danger")
         return redirect('/admin-login')
 
     admin_id = session['admin_id']
-
-    # 1️⃣ Get form data
-    name = request.form['name']
-    email = request.form['email']
-    new_password = request.form['password']
-    new_image = request.files['profile_image']
-
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # 2️⃣ Fetch old admin data
+    if request.method == 'POST':
+        # 1️⃣ Get form data
+        name = request.form.get('name', '').strip()
+        email = request.form.get('email', '').strip()
+        new_password = request.form.get('password', '').strip()
+        new_image = request.files.get('profile_image')
+
+        if not name or not email:
+            cursor.close()
+            conn.close()
+            flash("Name and email are required!", "danger")
+            return redirect(url_for('admin_edit_profile'))
+
+        # 2️⃣ Fetch old admin data
+        cursor.execute("SELECT * FROM admin WHERE admin_id = %s", (admin_id,))
+        admin = cursor.fetchone()
+
+        if not admin:
+            cursor.close()
+            conn.close()
+            flash("Admin account not found!", "danger")
+            return redirect('/admin-login')
+
+        old_image_name = admin.get('profile_image')
+
+        # 3️⃣ Update password only if entered
+        if new_password:
+            hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        else:
+            hashed_password = admin['password']  # keep old password
+
+        # 4️⃣ Process new profile image if uploaded
+        if new_image and new_image.filename != "":
+            from werkzeug.utils import secure_filename
+            new_filename = secure_filename(new_image.filename)
+
+            # Ensure upload folder exists
+            os.makedirs(app.config['ADMIN_UPLOAD_FOLDER'], exist_ok=True)
+
+            # Save new image
+            image_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], new_filename)
+            new_image.save(image_path)
+
+            # Delete old image if it exists
+            if old_image_name:
+                old_image_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], old_image_name)
+                if os.path.exists(old_image_path) and os.path.isfile(old_image_path):
+                    try:
+                        os.remove(old_image_path)
+                    except OSError:
+                        pass
+
+            final_image_name = new_filename
+        else:
+            final_image_name = old_image_name
+
+        # 5️⃣ Update database
+        cursor.execute("""
+            UPDATE admin
+            SET name=%s, email=%s, password=%s, profile_image=%s
+            WHERE admin_id=%s
+        """, (name, email, hashed_password, final_image_name, admin_id))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Update session name for UI consistency
+        session['admin_name'] = name  
+        session['admin_email'] = email
+
+        flash("Profile updated successfully!", "success")
+        return redirect(url_for('admin_profile'))
+
+    # GET request: render edit profile page
     cursor.execute("SELECT * FROM admin WHERE admin_id = %s", (admin_id,))
     admin = cursor.fetchone()
-
-    old_image_name = admin['profile_image']
-
-    # 3️⃣ Update password only if entered
-    if new_password:
-        hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt())
-    else:
-        hashed_password = admin['password']  # keep old password
-
-    # 4️⃣ Process new profile image if uploaded
-    if new_image and new_image.filename != "":
-        
-        from werkzeug.utils import secure_filename
-        new_filename = secure_filename(new_image.filename)
-
-        # Save new image
-        image_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], new_filename)
-        new_image.save(image_path)
-
-        # Delete old image
-        if old_image_name:
-            old_image_path = os.path.join(app.config['ADMIN_UPLOAD_FOLDER'], old_image_name)
-            if os.path.exists(old_image_path):
-                os.remove(old_image_path)
-
-        final_image_name = new_filename
-    else:
-        final_image_name = old_image_name
-
-    # 5️⃣ Update database
-    cursor.execute("""
-        UPDATE admin
-        SET name=%s, email=%s, password=%s, profile_image=%s
-        WHERE admin_id=%s
-    """, (name, email, hashed_password, final_image_name, admin_id))
-
-    conn.commit()
     cursor.close()
     conn.close()
 
-    # Update session name for UI consistency
-    session['admin_name'] = name  
-    session['admin_email'] = email
+    if not admin:
+        flash("Admin account not found!", "danger")
+        return redirect('/admin-login')
 
-    flash("Profile updated successfully!", "success")
-    return redirect('/admin/profile')
+    return render_template("admin/admin_edit_profile.html", admin=admin)
+
+
+# Backward compatibility alias
+admin_profile_update = admin_edit_profile
 @app.route('/user-register', methods=['GET', 'POST'])
 def user_register():
 
@@ -1142,7 +1193,7 @@ def user_profile():
     cursor = conn.cursor(dictionary=True)
 
     cursor.execute("""
-        SELECT user_id, name, email, phone, created_at
+        SELECT *
         FROM users
         WHERE user_id = %s
     """, (session['user_id'],))
@@ -1176,8 +1227,9 @@ def user_edit_profile():
 
     if request.method == 'POST':
 
-        name = request.form['name'].strip()
-        phone = request.form['phone'].strip()
+        name = request.form.get('name', '').strip()
+        phone = request.form.get('phone', '').strip()
+        new_image = request.files.get('profile_image')
 
         if not name or not phone:
             cursor.close()
@@ -1191,16 +1243,49 @@ def user_edit_profile():
             flash("Enter a valid 10-digit phone number!", "danger")
             return redirect('/user-edit-profile')
 
+        # Fetch current user to manage existing profile image
+        cursor.execute("SELECT * FROM users WHERE user_id = %s", (session['user_id'],))
+        current_user = cursor.fetchone()
+        old_image = current_user.get('profile_image') if current_user else None
+
+        final_image = old_image
+        if new_image and new_image.filename != "":
+            orig_filename = secure_filename(new_image.filename)
+            ext = os.path.splitext(orig_filename)[1].lower()
+
+            if ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                new_filename = f"user_{session['user_id']}_{int(time.time())}{ext}"
+                os.makedirs(app.config['USER_UPLOAD_FOLDER'], exist_ok=True)
+                image_path = os.path.join(app.config['USER_UPLOAD_FOLDER'], new_filename)
+                new_image.save(image_path)
+
+                # Remove previous profile image file if exists
+                if old_image:
+                    old_path = os.path.join(app.config['USER_UPLOAD_FOLDER'], old_image)
+                    if os.path.exists(old_path) and os.path.isfile(old_path):
+                        try:
+                            os.remove(old_path)
+                        except OSError:
+                            pass
+
+                final_image = new_filename
+            else:
+                cursor.close()
+                conn.close()
+                flash("Invalid image format! Only JPG, PNG, and WebP are allowed.", "danger")
+                return redirect('/user-edit-profile')
+
         cursor.execute("""
             UPDATE users
-            SET name = %s, phone = %s
+            SET name = %s, phone = %s, profile_image = %s
             WHERE user_id = %s
-        """, (name, phone, session['user_id']))
+        """, (name, phone, final_image, session['user_id']))
 
         conn.commit()
 
-        # Update the name stored in the session
+        # Update the name and image stored in session
         session['user_name'] = name
+        session['user_image'] = final_image
 
         cursor.close()
         conn.close()
@@ -1209,7 +1294,7 @@ def user_edit_profile():
         return redirect('/user-profile')
 
     cursor.execute("""
-        SELECT user_id, name, email, phone
+        SELECT *
         FROM users
         WHERE user_id = %s
     """, (session['user_id'],))
@@ -1758,7 +1843,7 @@ def payment_success():
             cols_to_insert = [c for c in order_data if c in existing_cols]
             col_list = ", ".join(cols_to_insert)
             placeholders = ", ".join(["%s"] * len(cols_to_insert))
-            values = tuple(order_data[c] for c in cols_to_insert)
+            values = tuple(float(order_data[c]) if isinstance(order_data[c], Decimal) else order_data[c] for c in cols_to_insert)
 
             cursor.execute(
                 f"INSERT INTO orders ({col_list}) VALUES ({placeholders})",
@@ -1767,10 +1852,11 @@ def payment_success():
             order_db_id = cursor.lastrowid
 
             for product_id, item in selected_items.items():
-                price = Decimal(str(item['price'])).quantize(Decimal('0.01'))
+                item_price = float(Decimal(str(item['price'])).quantize(Decimal('0.01')))
                 quantity = int(item['quantity'])
                 if quantity < 1:
                     raise ValueError("Invalid product quantity in checkout.")
+                subtotal = float(item_price * quantity)
                 cursor.execute(
                     """INSERT INTO order_items (
                         order_id, product_id, product_name, product_image,
@@ -1778,7 +1864,7 @@ def payment_success():
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                     (
                         order_db_id, int(product_id), item.get('name', 'Product'),
-                        item.get('image', ''), price, quantity, price * quantity
+                        item.get('image', ''), item_price, quantity, subtotal
                     )
                 )
 

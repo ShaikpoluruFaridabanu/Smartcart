@@ -2,13 +2,18 @@
 
 Never commit real passwords or Razorpay secrets to source control.
 """
-SECRET_KEY = "your_secret_key"
+import os
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+SQLITE_DB_PATH = os.environ.get('SQLITE_DB_PATH', os.path.join(BASE_DIR, 'smartcart.db'))
 
-# MySQL Database
-DB_HOST = "localhost"
-DB_USER = "root"
-DB_PASSWORD = "root"
-DB_NAME = "smartcart_db"
+SECRET_KEY = os.environ.get("SECRET_KEY", "your_secret_key")
+
+# Database (SQLite is default for easy deployment)
+DB_TYPE = os.environ.get("DB_TYPE", "sqlite")
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_USER = os.environ.get("DB_USER", "root")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "root")
+DB_NAME = os.environ.get("DB_NAME", "smartcart_db")
 
 # Email SMTP Settings
 MAIL_SERVER = 'smtp.gmail.com'
